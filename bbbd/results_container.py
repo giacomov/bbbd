@@ -1,5 +1,5 @@
 import json
-
+import collections
 from util.io_utils import sanitize_filename
 
 
@@ -8,25 +8,26 @@ class ResultsContainer(object):
     A class to contain the results of the search
 
     """
-    _default_values = {'name': '',
-                       'trigger time': 0.0,
-                       'ra': 999,
-                       'dec': 999,
-                       'background fit gof': -1,
-                       'number of intervals': 0,
-                       'detected': False,
-                       'blocks': '',
-                       'highest net rate': -1.0,
-                       'highest net rate error': -1.0,
-                       'highest net rate tstart': 999,
-                       'highest net rate tstop': 999,
-                       'highest net rate duration': -1,
-                       'highest net rate background': -1.0
-                       }
+    _default_values = (('name', ''),
+                       ('trigger time', 0.0),
+                       ('ra', 999),
+                       ('dec', 999),
+                       ('background fit gof', -1),
+                       ('number of intervals', 0),
+                       ('detected', False),
+                       ('blocks', ''),
+                       ('highest net rate', -1.0),
+                       ('highest net rate error', -1.0),
+                       ('highest net rate tstart', 999),
+                       ('highest net rate tstop', 999),
+                       ('highest net rate duration', -1),
+                       ('highest net rate background', -1.0),
+                       ('highest net rate background error', -1.0),
+                       ('highest net rate significance', -1.0))
 
     def __init__(self):
 
-        self._inner_dict = dict(ResultsContainer._default_values)
+        self._inner_dict = collections.OrderedDict(ResultsContainer._default_values)
 
     def __setitem__(self, key, value):
 
@@ -37,6 +38,12 @@ class ResultsContainer(object):
     def __getitem__(self, item):
 
         return self._inner_dict[item]
+
+    def display(self):
+
+        for key, value in self._inner_dict.items():
+
+            print("%40s: %s" % (key, value))
 
     def write_to(self, json_file):
         """

@@ -13,7 +13,7 @@ from bbbd.fit_functions.lle_polynomial import LLEPolynomial
 from bbbd.statistic.bayesian_blocks import bayesian_blocks
 from bbbd.statistic.bkg_integral_distribution import BackgroundIntegralDistribution
 from bbbd.results_container import ResultsContainer
-
+from bbbd.statistic.significance import Significance
 
 def get_rate(arrival_times, exposure_function, bins, reference_time, bkg_poly=None, best_fit_poly=None):
 
@@ -93,7 +93,8 @@ def go(args):
     best_fit_poly, cstat, fig = eh.fit_background(llep, off_pulse_intervals)
 
     # Compute goodness of fit for the background
-    bkg_gof = eh.get_background_gof(cstat, llep, best_fit_poly, args.nbkgsim, off_pulse_intervals)
+    # (this also returns the best fit parameters for the polynomials obtained from the simulations)
+    bkg_gof, bkg_sim_best_fits = eh.get_background_gof(cstat, llep, best_fit_poly, args.nbkgsim, off_pulse_intervals)
 
     logger.info("Background goodness of fit: %.3f" % (bkg_gof))
 
@@ -174,19 +175,42 @@ def go(args):
         max_rate_tstop = blocks[1:][max_rate_idx]
         max_rate_duration = max_rate_tstop - max_rate_tstart
 
+        # Get maximum rate and rate error
+        highest_net_rate = bkg_sub_rate[max_rate_idx]
+        highest_net_rate_err = bkg_sub_rate_err[max_rate_idx]
+
+        # Get corresponding background and background error
+        highest_net_rate_bkg = llep(max_rate_tstart, max_rate_tstop, best_fit_poly)
+
+        # To get the error we use the best fit values of the simulations obtained above and measure the 68% percentile
+        bkg_estimates = map(lambda this_best_fit:llep(max_rate_tstart, max_rate_tstop, this_best_fit),
+                            bkg_sim_best_fits)
+
+        highest_net_rate_bkg_err = np.percentile(bkg_estimates, 84) - highest_net_rate_bkg
+
+        # Now compute the significance
+        this_expo = eh.lle_exposure.get_exposure(max_rate_tstart + trigger_time,
+                                                 max_rate_tstop + trigger_time)
+        sig = Significance(highest_net_rate * this_expo, highest_net_rate_bkg * this_expo, alpha=1.0)
+        highest_net_rate_significance = sig.li_and_ma_equivalent_for_gaussian_background(highest_net_rate_bkg_err *
+                                                                                         this_expo)[0]
+
         logger.info("Maximum net rate: %.3f +/- %.3f cts at %.3f - %.3f "
-                    "(duration = %.2f s)" % (bkg_sub_rate[max_rate_idx],
-                                             bkg_sub_rate_err[max_rate_idx],
+                    "(duration = %.2f s)" % (highest_net_rate,
+                                             highest_net_rate_err,
                                              max_rate_tstart, max_rate_tstop,
                                              max_rate_duration))
+        logger.info("Significance at maximum rate: %.2f sigma" % highest_net_rate_significance)
 
         # Save in the results
-        results['highest net rate'] = bkg_sub_rate[max_rate_idx]
-        results['highest net rate error'] = bkg_sub_rate_err[max_rate_idx]
+        results['highest net rate'] = highest_net_rate
+        results['highest net rate error'] = highest_net_rate_err
         results['highest net rate tstart'] = max_rate_tstart
         results['highest net rate tstop'] = max_rate_tstop
         results['highest net rate duration'] = max_rate_duration
-        results['highest net rate background'] = llep(max_rate_tstart, max_rate_tstop, best_fit_poly)
+        results['highest net rate background'] = highest_net_rate_bkg
+        results['highest net rate background error'] = highest_net_rate_bkg_err
+        results['highest net rate significance'] = highest_net_rate_significance
 
         # Make a light curve with a bin size equal to the length of the block with the maximum rate,
         # and shifted so that the block with the maximum rate is exactly one of the bins
@@ -276,8 +300,15 @@ def go(args):
     # NOTE: if there is a detection, all the other results are filled up there (above)
 
     # Write JSON file
+    outfile = sanitize_filename(args.outfile)
+    logger.info("Writing results in JSON to %s" % (outfile))
+    results.write_to(outfile)
 
-    results.write_to(args.outfile)
+    # Print the results
+    print("\nFinal results:")
+    print("==============\n")
+    results.display()
+    print("\n")
 
 if __name__ == "__main__":
 

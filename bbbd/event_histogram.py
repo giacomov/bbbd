@@ -157,7 +157,9 @@ class EventHistogram(object):
 
     def _get_cstat_distribution(self, fit_polynomial, coefficients, n_iteration, intervals):
 
-        cstats = np.zeros(n_iteration)
+        cstats = []
+
+        best_fit_polys = []
 
         logger.info("Starting simulation of background for cstat distribution...")
 
@@ -167,32 +169,33 @@ class EventHistogram(object):
 
                 logger.info("%.2f percent done" % (100.0 * (i+1) / float(n_iteration)))
 
-            this_sim = self.get_simulation(fit_polynomial, coefficients)
+            this_sim = self.get_simulation(fit_polynomial, coefficients, self._background_mask)
 
             best_fit_poly, cstat, _ = this_sim.fit_background(fit_polynomial, intervals, quiet=True, plot=False,
-                                                              background_mask=self._background_mask)
+                                                              background_mask=self._background_mask,
+                                                              initial_approx=coefficients)
 
-            cstats[i] = cstat
+            best_fit_polys.append(best_fit_poly)
+            cstats.append(cstat)
 
-        return cstats
+        return np.array(cstats), np.array(best_fit_polys)
 
     def get_background_gof(self, best_fit_cstat, fit_polynomial, coefficients, n_iteration, intervals):
 
-        cstats = self._get_cstat_distribution(fit_polynomial, coefficients, n_iteration, intervals)
+        cstats, best_fit_polys = self._get_cstat_distribution(fit_polynomial, coefficients, n_iteration, intervals)
 
         idx = (cstats >= best_fit_cstat)
 
-        return float(np.sum(idx)) / cstats.shape[0]
+        return float(np.sum(idx)) / cstats.shape[0], best_fit_polys
 
-    def get_simulation(self, fit_polynomial, coefficients):
-
-        idx = self._exposure > 0
+    def get_simulation(self, fit_polynomial, coefficients, mask):
 
         expected_rate = np.zeros_like(self._exposure)
-        expected_rate[idx] = fit_polynomial(self._bin_starts[idx], self._bin_stops[idx], coefficients)
+        expected_rate[mask] = fit_polynomial(self._bin_starts[mask], self._bin_stops[mask], coefficients)
 
         randomized_counts = np.zeros_like(self._exposure)
-        randomized_counts[idx] = np.random.poisson(expected_rate[idx] * self._exposure[idx])
+
+        randomized_counts[mask] = np.random.poisson(expected_rate[mask] * self._exposure[mask])
 
         # Clone current histogram
 
@@ -206,7 +209,8 @@ class EventHistogram(object):
 
         return clone
 
-    def fit_background(self, fit_polynomial, intervals, quiet=False, plot=True, background_mask=None):
+    def fit_background(self, fit_polynomial, intervals, quiet=False, plot=True, background_mask=None,
+                       initial_approx=None):
 
         if background_mask is None:
 
@@ -224,31 +228,97 @@ class EventHistogram(object):
 
         if not quiet: logger.info("Selected %i points" % np.sum(background_mask))
 
-        # First we perform a robust unweighted least square optimization, to find a reasonable first approximation
+        if initial_approx is None:
 
-        initial_approx = np.polyfit(self._bin_centers[background_mask],
-                                    self._counts[background_mask] / self._exposure[background_mask],
-                                    fit_polynomial.degree)
+            # First we perform a robust unweighted least square optimization, to find a reasonable first approximation
 
-        if not quiet: logger.info("Robust unweighted least square returned these coefficients: %s" % (initial_approx))
+            this_rate = self._counts[background_mask] / self._exposure[background_mask]
+
+            this_counts_error = (1 + np.sqrt(self._counts[background_mask] + 0.75))
+
+            weight = 1 / (this_counts_error / self._exposure[background_mask]) # type: np.ndarray
+
+            initial_approx = np.polyfit(self._bin_centers[background_mask],
+                                        this_rate,
+                                        fit_polynomial.degree,
+                                        w=weight) # type: np.ndarray
+
+            if not quiet:
+
+                logger.info("Robust unweighted least square returned these coefficients: %s" % list(initial_approx))
+
+        # Define the objective function (which is cstat)
 
         def _objective_function(coefficients):
-
-            expected_rate = fit_polynomial(self._bin_starts[background_mask], self._bin_stops[background_mask], coefficients)
+            expected_rate = fit_polynomial(self._bin_starts[background_mask], self._bin_stops[background_mask],
+                                           coefficients)
 
             expected_counts = expected_rate * self._exposure[background_mask]
 
             log_like = poisson_log_likelihood_no_bkg(self._counts[background_mask], expected_counts)
 
-            return -log_like
+            # Scale the log like by 100 to make easier the convergence of SBQL
+
+            return -log_like / 100
+
+        if not quiet:
+
+            logger.info("Starting value for statistic: %.3f" % (_objective_function(initial_approx) * 100))
+
+        # Now scale the parameters (because SLSQP needs need to be more or less in the same ballpark, while
+        # in general in a polynomial they are very different)
+
+        scales = 10 ** (np.log10(np.abs(initial_approx)))
+
+        fit_polynomial.set_scales(scales)
+
+        # Scale the initial approximation
+
+        initial_approx_scaled = initial_approx / scales
+
+        # Construct bounds to avoid too wide variations
+        bounds = []
+
+        for a, b in zip(initial_approx_scaled / 20, initial_approx_scaled * 20):
+
+            bounds.append(sorted([a, b]))
+
+        # Construct constraint (force the polynomial to be positive definite over the intervals)
+        def _constraint(coefficients):
+
+            expected_rate = fit_polynomial(self._bin_starts[background_mask], self._bin_stops[background_mask],
+                                           coefficients)
+
+            return np.sum(expected_rate[expected_rate < 0])
+
+        # Verify that the initial set of value verifies the constraint
+
+        assert _constraint(initial_approx_scaled) == 0
+
+        cons = ({'type': 'ineq', 'fun': _constraint})
+
+        # Minimize!
 
         result = scipy.optimize.minimize(_objective_function,
-                                         initial_approx)
+                                         initial_approx_scaled,
+                                         options={'disp': False, 'ftol': 1e-2, 'maxiter': 100000},
+                                         bounds=None,
+                                         constraints=cons,
+                                         method='SLSQP')
+
+        assert result.success == True, "Background fit failed!"
+
+        # Get the "true" best fit coefficients, i.e., the results of the fit multiplied by the scales
+
+        best_fit_coefficients = result.x * scales
+
+        # Remove scales
+        fit_polynomial.remove_scales()
 
         if not quiet:
             logger.info("Fit results:")
-            logger.info("Coefficients: %s" % map(lambda x:"%.3g" % x, result.x))
-            logger.info("Likelihood value: %s" % result.fun)
+            logger.info("Coefficients: %s" % map(lambda x:"%.3g" % x, best_fit_coefficients))
+            logger.info("Likelihood value: %s" % (result.fun * 100))
 
         if plot:
 
@@ -260,7 +330,7 @@ class EventHistogram(object):
 
             sub.step(self._edges, rr, where='post')
 
-            rr2 = fit_polynomial(self._bin_starts, self._bin_stops, result.x)
+            rr2 = fit_polynomial(self._bin_starts, self._bin_stops, best_fit_coefficients)
             rr2 = np.append(rr2, 0)
 
             sub.step(self._edges,
@@ -277,4 +347,4 @@ class EventHistogram(object):
 
             fig = None
 
-        return result.x, result.fun, fig
+        return best_fit_coefficients, result.fun, fig

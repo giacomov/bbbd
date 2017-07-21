@@ -33,6 +33,8 @@ class LLEPolynomial(object):
 
         self._degree = int(degree)
 
+        self._scales = np.ones(self._degree+1)
+
     @property
     def degree(self):
         return self._degree
@@ -41,13 +43,21 @@ class LLEPolynomial(object):
     def reference_time(self):
         return self._reference_time
 
+    def set_scales(self, scales):
+
+        self._scales = scales
+
+    def remove_scales(self):
+
+        self._scales = np.ones(self._degree+1)
+
     def __call__(self, tstarts, tstops, poly_coefficients):
 
         t1 = tstarts
         t2 = tstops
         tt = 0.5 * (t2 + t1)
 
-        this_poly = np.poly1d(poly_coefficients)
+        this_poly = np.poly1d(poly_coefficients * self._scales)
 
         integral = this_poly.integ()
 
@@ -57,6 +67,8 @@ class LLEPolynomial(object):
 
         corr = np.cos(thetas_rad)
 
-        expected_counts = np.maximum(integrals * corr, 0)
+        expected_counts = integrals * corr
+
+        # expected_counts = np.maximum(integrals * corr, 0)
 
         return expected_counts
