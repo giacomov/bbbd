@@ -12,6 +12,7 @@ from bbbd.util.io_utils import sanitize_filename
 from bbbd.fit_functions.lle_polynomial import LLEPolynomial
 from bbbd.statistic.bayesian_blocks import bayesian_blocks
 from bbbd.statistic.bkg_integral_distribution import BackgroundIntegralDistribution
+from bbbd.results_container import ResultsContainer
 
 
 def get_rate(arrival_times, exposure_function, bins, reference_time, bkg_poly=None, best_fit_poly=None):
@@ -54,6 +55,10 @@ def get_rate(arrival_times, exposure_function, bins, reference_time, bkg_poly=No
 
 
 def go(args):
+
+    # Create container for the results
+    results = ResultsContainer()
+
     # Read information on the event from the FITS file
 
     ra = pyfits.getval(lle_file, "RA_OBJ")
@@ -85,7 +90,12 @@ def go(args):
 
     # Fit the background
 
-    best_fit_poly, cstat, fig = eh.fit_background(llep, *off_pulse_intervals)
+    best_fit_poly, cstat, fig = eh.fit_background(llep, off_pulse_intervals)
+
+    # Compute goodness of fit for the background
+    bkg_gof = eh.get_background_gof(cstat, llep, best_fit_poly, args.nbkgsim, off_pulse_intervals)
+
+    logger.info("Background goodness of fit: %.3f" % (bkg_gof))
 
     # Save background fit plot
 
@@ -123,7 +133,9 @@ def go(args):
 
     bb_file = sanitize_filename("bb_res_%s.png" % trigger_name)
 
-    if n_intervals > 2:
+    detected = n_intervals > 2
+
+    if detected:
 
         interesting_intervals = zip(blocks[1:-1], blocks[2:-1])
 
@@ -166,6 +178,14 @@ def go(args):
                                              bkg_sub_rate_err[max_rate_idx],
                                              max_rate_tstart, max_rate_tstop,
                                              max_rate_duration))
+
+        # Save in the results
+        results['highest net rate'] = bkg_sub_rate[max_rate_idx]
+        results['highest net rate error'] = bkg_sub_rate_err[max_rate_idx]
+        results['highest net rate tstart'] = max_rate_tstart
+        results['highest net rate tstop'] = max_rate_tstop
+        results['highest net rate duration'] = max_rate_duration
+        results['highest net rate background'] = llep(max_rate_tstart, max_rate_tstop, best_fit_poly)
 
         # Make a light curve with a bin size equal to the length of the block with the maximum rate,
         # and shifted so that the block with the maximum rate is exactly one of the bins
@@ -226,8 +246,6 @@ def go(args):
 
         sub.step(optimal_bins, rr, where='post', color='blue')
 
-        bc = 0.5 * (optimal_bins[1:] + optimal_bins[:-1])
-
         sub.axhline(0, linestyle='--', color='grey', alpha=0.5)
 
         sub.set_ylabel("Net rate (cts/s)")
@@ -244,14 +262,32 @@ def go(args):
 
         fig.savefig(optimal_lc)
 
+    # Save results
+    results['name'] = trigger_name
+    results['trigger time'] = trigger_time
+    results['ra'] = ra
+    results['dec'] = dec
+    results['background fit gof'] = bkg_gof
+    results['number of intervals'] = n_intervals
+    results['detected'] = detected
+    results['blocks'] = ",".join(map(lambda x:"%.3f" % x, blocks))
+
+    # NOTE: if there is a detection, all the other results are filled up there (above)
+
+    # Write JSON file
+
+    results.write_to(args.outfile)
+
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description='Find transients in LLE data using Bayesian Blocks')
 
     parser.add_argument("--lle", help="Path to the LLE (FT1) file", type=str, required=True)
     parser.add_argument("--pt", help="Path to the pointing file (FT2)", type=str, required=True)
-    parser.add_argument("--p0", help="False detection probability for the Bayesian Block step (default: 1e-4",
+    parser.add_argument("--p0", help="False detection probability for the Bayesian Block step (default: 1e-4)",
                         type=float, default=1e-4)
+    parser.add_argument("--outfile", help="Outfile which will contain the results of the analysis",
+                        type=str, required=True)
     parser.add_argument("--search_window", help="Time interval where to search for a signal (search window). "
                                                 "Default is '-50 200'",
                         nargs='+', default=[-50.0, 200.0], type=float)
@@ -262,6 +298,8 @@ if __name__ == "__main__":
                         default=None, type=str)
     parser.add_argument("--poly_degree", help="Degree for the polynomial to be used in the fit (default: 3)",
                         default=3, type=int)
+    parser.add_argument("--nbkgsim", help="Number of simulations for the background goodness of fit (default: 1000)",
+                        default=1000, type=int)
     parser.add_argument("--off_pulse_intervals", help="Definition of the off-pulse off_pulse_intervals for background fitting."
                                                       "Default is '-400 -20 150 500' corresponding to the off_pulse_intervals"
                                                       "-400 - 20 and 150 - 500 (in time since trigger).",

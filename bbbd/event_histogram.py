@@ -4,6 +4,7 @@ import os
 import scipy.optimize
 import astropy.io.fits as pyfits
 import matplotlib.pyplot as plt
+import copy
 
 
 from bbbd.util.logging_system import get_logger
@@ -63,6 +64,9 @@ class EventHistogram(object):
             logger.info("No exposure function provided, assuming 100% livetime")
 
             self._exposure = self._bin_widths
+
+        # This will contain the selection for the background fit
+        self._background_mask = None
 
     @property
     def arrival_times(self):
@@ -151,65 +155,126 @@ class EventHistogram(object):
         return cls(data[time_column], bin_size=bin_size, tstart=tstart, tstop=tstop, reference_time=reference_time,
                    exposure_function=exposure_function)
 
-    def fit_background(self, fit_polynomial, *intervals):
+    def _get_cstat_distribution(self, fit_polynomial, coefficients, n_iteration, intervals):
 
-        mask = np.array(np.zeros_like(self._bin_starts), dtype=bool)
+        cstats = np.zeros(n_iteration)
 
-        # Select data to fit
-        for (t1, t2) in intervals:
+        logger.info("Starting simulation of background for cstat distribution...")
 
-            # Select all bins between t1 and t2
-            idx = (self._bin_starts >= t1) & (self._bin_stops < t2) & (self._exposure > 0)
+        for i in range(n_iteration):
 
-            mask[idx] = True
+            if (i+1) % 100 == 0:
 
-        logger.info("Selected %i points" % np.sum(mask))
+                logger.info("%.2f percent done" % (100.0 * (i+1) / float(n_iteration)))
+
+            this_sim = self.get_simulation(fit_polynomial, coefficients)
+
+            best_fit_poly, cstat, _ = this_sim.fit_background(fit_polynomial, intervals, quiet=True, plot=False,
+                                                              background_mask=self._background_mask)
+
+            cstats[i] = cstat
+
+        return cstats
+
+    def get_background_gof(self, best_fit_cstat, fit_polynomial, coefficients, n_iteration, intervals):
+
+        cstats = self._get_cstat_distribution(fit_polynomial, coefficients, n_iteration, intervals)
+
+        idx = (cstats >= best_fit_cstat)
+
+        return float(np.sum(idx)) / cstats.shape[0]
+
+    def get_simulation(self, fit_polynomial, coefficients):
+
+        idx = self._exposure > 0
+
+        expected_rate = np.zeros_like(self._exposure)
+        expected_rate[idx] = fit_polynomial(self._bin_starts[idx], self._bin_stops[idx], coefficients)
+
+        randomized_counts = np.zeros_like(self._exposure)
+        randomized_counts[idx] = np.random.poisson(expected_rate[idx] * self._exposure[idx])
+
+        # Clone current histogram
+
+        clone = copy.deepcopy(self)
+
+        # Overwrite the counts with the normalized version
+        clone._counts = randomized_counts
+
+        # Remove the _times array so we are not tempted to use it
+        clone._times = None
+
+        return clone
+
+    def fit_background(self, fit_polynomial, intervals, quiet=False, plot=True, background_mask=None):
+
+        if background_mask is None:
+
+            background_mask = np.array(np.zeros_like(self._bin_starts), dtype=bool)
+
+            # Select data to fit
+            for (t1, t2) in intervals:
+
+                # Select all bins between t1 and t2
+                idx = (self._bin_starts >= t1) & (self._bin_stops < t2) & (self._exposure > 0)
+
+                background_mask[idx] = True
+
+        self._background_mask = background_mask
+
+        if not quiet: logger.info("Selected %i points" % np.sum(background_mask))
 
         # First we perform a robust unweighted least square optimization, to find a reasonable first approximation
 
-        initial_approx = np.polyfit(self._bin_centers[mask],
-                                    self._counts[mask] / self._exposure[mask],
+        initial_approx = np.polyfit(self._bin_centers[background_mask],
+                                    self._counts[background_mask] / self._exposure[background_mask],
                                     fit_polynomial.degree)
 
-        logger.info("Robust unweighted least square returned these coefficients: %s" % (initial_approx))
+        if not quiet: logger.info("Robust unweighted least square returned these coefficients: %s" % (initial_approx))
 
         def _objective_function(coefficients):
 
-            expected_rate = fit_polynomial(self._bin_starts[mask], self._bin_stops[mask], coefficients)
+            expected_rate = fit_polynomial(self._bin_starts[background_mask], self._bin_stops[background_mask], coefficients)
 
-            expected_counts = expected_rate * self._exposure[mask]
+            expected_counts = expected_rate * self._exposure[background_mask]
 
-            log_like = poisson_log_likelihood_no_bkg(self._counts[mask], expected_counts)
+            log_like = poisson_log_likelihood_no_bkg(self._counts[background_mask], expected_counts)
 
             return -log_like
 
         result = scipy.optimize.minimize(_objective_function,
-                                         initial_approx,
-                                         method='BFGS')
+                                         initial_approx)
 
-        logger.info("Fit results:")
-        logger.info("Coefficients: %s" % map(lambda x:"%.3g" % x, result.x))
-        logger.info("Likelihood value: %s" % result.fun)
+        if not quiet:
+            logger.info("Fit results:")
+            logger.info("Coefficients: %s" % map(lambda x:"%.3g" % x, result.x))
+            logger.info("Likelihood value: %s" % result.fun)
 
-        fig, sub = plt.subplots(1, 1)
+        if plot:
 
-        idx = self._exposure > 0
-        rr = np.zeros_like(self._edges)
-        rr[:-1][idx] = self._counts[idx] / self._exposure[idx]
+            fig, sub = plt.subplots(1, 1)
 
-        sub.step(self._edges, rr, where='post')
+            idx = self._exposure > 0
+            rr = np.zeros_like(self._edges)
+            rr[:-1][idx] = self._counts[idx] / self._exposure[idx]
 
-        rr2 = fit_polynomial(self._bin_starts, self._bin_stops, result.x)
-        rr2 = np.append(rr2, 0)
+            sub.step(self._edges, rr, where='post')
 
-        sub.step(self._edges,
-                 rr2,
-                 where='post')
+            rr2 = fit_polynomial(self._bin_starts, self._bin_stops, result.x)
+            rr2 = np.append(rr2, 0)
 
-        sub.set_xlabel("Time since %s" % self._reference_time)
-        sub.set_ylabel("Rate (cts/s)")
+            sub.step(self._edges,
+                     rr2,
+                     where='post')
 
-        sub.set_xlim([self._bin_starts[mask].min(), self._bin_stops[mask].max()])
-        sub.set_ylim([0.5 * rr.min(), 1.5 * rr.max()])
+            sub.set_xlabel("Time since %s" % self._reference_time)
+            sub.set_ylabel("Rate (cts/s)")
+
+            sub.set_xlim([self._bin_starts[background_mask].min(), self._bin_stops[background_mask].max()])
+            sub.set_ylim([0.5 * rr.min(), 1.5 * rr.max()])
+
+        else:
+
+            fig = None
 
         return result.x, result.fun, fig
