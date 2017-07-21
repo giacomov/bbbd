@@ -140,7 +140,8 @@ def go(args):
         interesting_intervals = zip(blocks[1:-1], blocks[2:-1])
 
         # Print out the off_pulse_intervals (if any)
-        logger.info("Found %i interesting off_pulse_intervals" % len(interesting_intervals))
+        logger.info("Found %i interesting intervals between %.3f and %.3f" % (len(interesting_intervals),
+                                                                              search_tstart, search_tstop))
 
         # Make image and print off_pulse_intervals
         fig = eh.plot()
@@ -214,8 +215,8 @@ def go(args):
 
         # Zoom in if necessary so we do not show parts where the background model does not apply
         # (i.e., before and after the end of the off-pulse intervals)
-        sub.set_xlim([max(optimal_bins.min(), min(args.off_pulse_intervals)),
-                      min(optimal_bins.max(), max(args.off_pulse_intervals))])
+        sub.set_xlim([max(search_tstart, min(args.off_pulse_intervals), optimal_bins.min()),
+                      min(search_tstop, max(args.off_pulse_intervals), optimal_bins.max())])
 
         optimal_lc = sanitize_filename("optimal_lc_%s.png" % trigger_name)
 
