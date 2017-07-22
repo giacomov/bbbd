@@ -1,5 +1,9 @@
 #!/usr/bin/env python
 
+# Use non-interactive backend
+import matplotlib
+matplotlib.use("Agg")
+
 import argparse
 import os
 import astropy.io.fits as pyfits
