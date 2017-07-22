@@ -29,7 +29,7 @@ setup(
 
     install_requires=['numexpr',
                       'numpy',
-                      'scipy',
+                      'scipy>=0.18',
                       'astropy'],
 
     scripts=scripts,

@@ -63,7 +63,13 @@ class LLEPolynomial(object):
 
         integrals = (integral(t2) - integral(t1)) / (t2 - t1)
 
-        thetas_rad = self._theta_interpolator_radians(tt)
+        try:
+
+            thetas_rad = self._theta_interpolator_radians(tt)
+
+        except ValueError:
+
+            import pdb;pdb.set_trace()
 
         corr = np.cos(thetas_rad)
 

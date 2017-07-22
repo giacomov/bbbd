@@ -330,8 +330,14 @@ class EventHistogram(object):
 
             sub.step(self._edges, rr, where='post')
 
-            rr2 = fit_polynomial(self._bin_starts, self._bin_stops, best_fit_coefficients)
-            rr2 = np.append(rr2, 0)
+            rr2 = np.zeros_like(self._edges)
+            # The polynomial can only be evaluated within the off-pulse extremes
+            idx = ((self._bin_starts >= self._bin_starts[background_mask].min()) &
+                   (self._bin_stops  <= self._bin_stops[background_mask].max()))
+
+            rr2[:-1][idx] = fit_polynomial(self._bin_starts[idx],
+                                           self._bin_stops[idx],
+                                           best_fit_coefficients)
 
             sub.step(self._edges,
                      rr2,
