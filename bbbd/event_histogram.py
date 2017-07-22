@@ -171,12 +171,23 @@ class EventHistogram(object):
 
             this_sim = self.get_simulation(fit_polynomial, coefficients, self._background_mask)
 
-            best_fit_poly, cstat, _ = this_sim.fit_background(fit_polynomial, intervals, quiet=True, plot=False,
-                                                              background_mask=self._background_mask,
-                                                              initial_approx=coefficients)
+            try:
 
-            best_fit_polys.append(best_fit_poly)
-            cstats.append(cstat)
+                best_fit_poly, cstat, _ = this_sim.fit_background(fit_polynomial, intervals, quiet=True, plot=False,
+                                                                  background_mask=self._background_mask,
+                                                                  initial_approx=coefficients)
+
+            except:
+
+                # Fit failed!
+                logger.warn("Iteration %i failed" % (i+1))
+
+                continue
+
+            else:
+
+                best_fit_polys.append(best_fit_poly)
+                cstats.append(cstat)
 
         return np.array(cstats), np.array(best_fit_polys)
 
@@ -293,7 +304,17 @@ class EventHistogram(object):
 
         # Verify that the initial set of value verifies the constraint
 
-        assert _constraint(initial_approx_scaled) == 0
+        if  _constraint(initial_approx_scaled) != 0:
+
+            # Need to fix this
+            expected_rate = fit_polynomial(self._bin_starts[background_mask], self._bin_stops[background_mask],
+                                           initial_approx_scaled)
+
+            max_neg = np.max(np.abs(expected_rate[expected_rate < 0]))
+
+            initial_approx_scaled[-1] = initial_approx_scaled[-1] + (max_neg / scales[-1] * 1.1)
+
+            logger.info("Fixed initial approximation to: %s" % (initial_approx_scaled * scales))
 
         cons = ({'type': 'ineq', 'fun': _constraint})
 
