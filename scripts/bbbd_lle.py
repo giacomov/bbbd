@@ -195,7 +195,8 @@ def go(args):
         # Now compute the significance
         this_expo = eh.lle_exposure.get_exposure(max_rate_tstart + trigger_time,
                                                  max_rate_tstop + trigger_time)
-        sig = Significance(highest_net_rate * this_expo, highest_net_rate_bkg * this_expo, alpha=1.0)
+        sig = Significance((highest_net_rate + highest_net_rate_bkg)* this_expo,
+                           highest_net_rate_bkg * this_expo, alpha=1.0)
         highest_net_rate_significance = sig.li_and_ma_equivalent_for_gaussian_background(highest_net_rate_bkg_err *
                                                                                          this_expo)[0]
 
