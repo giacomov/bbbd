@@ -53,7 +53,14 @@ def get_logger(name):
 
     handler.setFormatter(formatter)
 
-    logger.addHandler(handler)
+    if len(logger.handlers) == 0:
+
+        logger.addHandler(handler)
+
+    else:
+
+        # Logger already existed, no need to add a new handler
+        pass
 
     logger.propagate = False
 

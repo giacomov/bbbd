@@ -6,7 +6,6 @@ import astropy.io.fits as pyfits
 import matplotlib.pyplot as plt
 import copy
 
-
 from bbbd.util.logging_system import get_logger
 from bbbd.util.io_utils import sanitize_filename
 from bbbd.instrument_specific.Fermi_LAT_LLE import LLEExposure
@@ -243,9 +242,14 @@ class EventHistogram(object):
 
             # First we perform a robust unweighted least square optimization, to find a reasonable first approximation
 
-            this_rate = self._counts[background_mask] / self._exposure[background_mask]
+            # The final fit function will be a polynomial multiplied by cos(theta). Since polyfit cannot
+            # accept a user-defined function, we correct the data instead by diving them up by cos(theta)
 
-            this_counts_error = (1 + np.sqrt(self._counts[background_mask] + 0.75))
+            cos_theta = np.cos(fit_polynomial.theta_interpolator(self._bin_centers[background_mask]))
+
+            this_rate = self._counts[background_mask] / self._exposure[background_mask] / cos_theta
+
+            this_counts_error = (1 + np.sqrt(self._counts[background_mask] + 0.75)) / cos_theta
 
             weight = 1 / (this_counts_error / self._exposure[background_mask]) # type: np.ndarray
 
@@ -261,6 +265,7 @@ class EventHistogram(object):
         # Define the objective function (which is cstat)
 
         def _objective_function(coefficients):
+
             expected_rate = fit_polynomial(self._bin_starts[background_mask], self._bin_stops[background_mask],
                                            coefficients)
 
@@ -268,9 +273,9 @@ class EventHistogram(object):
 
             log_like = poisson_log_likelihood_no_bkg(self._counts[background_mask], expected_counts)
 
-            # Scale the log like by 100 to make easier the convergence of SBQL
+            # Scale the log like by 100 to make easier the convergence
 
-            return -log_like / 100
+            return -log_like / 100.0
 
         if not quiet:
 
@@ -290,44 +295,17 @@ class EventHistogram(object):
         # Construct bounds to avoid too wide variations
         bounds = []
 
-        for a, b in zip(initial_approx_scaled / 20, initial_approx_scaled * 20):
+        for a, b in zip(initial_approx_scaled / 1000, initial_approx_scaled * 1000):
 
             bounds.append(sorted([a, b]))
-
-        # Construct constraint (force the polynomial to be positive definite over the intervals)
-        def _constraint(coefficients):
-
-            expected_rate = fit_polynomial(self._bin_starts[background_mask], self._bin_stops[background_mask],
-                                           coefficients)
-
-            return np.sum(expected_rate[expected_rate < 0])
-
-        # Verify that the initial set of value verifies the constraint
-
-        if  _constraint(initial_approx_scaled) != 0:
-
-            # Need to fix this
-            expected_rate = fit_polynomial(self._bin_starts[background_mask], self._bin_stops[background_mask],
-                                           initial_approx_scaled)
-
-            max_neg = np.max(np.abs(expected_rate[expected_rate < 0]))
-
-            initial_approx_scaled[-1] = initial_approx_scaled[-1] + (max_neg / scales[-1] * 1.1)
-
-            logger.info("Fixed initial approximation to: %s" % (initial_approx_scaled * scales))
-
-        cons = ({'type': 'ineq', 'fun': _constraint})
 
         # Minimize!
 
         result = scipy.optimize.minimize(_objective_function,
                                          initial_approx_scaled,
                                          options={'disp': False, 'ftol': 1e-2, 'maxiter': 100000},
-                                         bounds=None,
-                                         constraints=cons,
-                                         method='SLSQP')
-
-        assert result.success == True, "Background fit failed!"
+                                         bounds=bounds,
+                                         constraints=None)
 
         # Get the "true" best fit coefficients, i.e., the results of the fit multiplied by the scales
 
@@ -340,6 +318,16 @@ class EventHistogram(object):
             logger.info("Fit results:")
             logger.info("Coefficients: %s" % map(lambda x:"%.3g" % x, best_fit_coefficients))
             logger.info("Likelihood value: %s" % (result.fun * 100))
+
+        # Make sure the fit is good
+        assert result.success == True, "Background fit failed!"
+
+        if not np.all(fit_polynomial(self._bin_starts[background_mask], self._bin_stops[background_mask],
+                                           result.x) >= 0):
+
+            logger.warn("Polynomial is not positive everywhere. Clipping it.")
+
+            fit_polynomial.clip_at_zero = True
 
         if plot:
 

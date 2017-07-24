@@ -35,6 +35,8 @@ class LLEPolynomial(object):
 
         self._scales = np.ones(self._degree+1)
 
+        self.clip_at_zero = False
+
     @property
     def degree(self):
         return self._degree
@@ -50,6 +52,15 @@ class LLEPolynomial(object):
     def remove_scales(self):
 
         self._scales = np.ones(self._degree+1)
+
+    @property
+    def theta_interpolator(self):
+        """
+        Returns the interpolator function for theta. Note that the function returns radians
+
+        :return:
+        """
+        return self._theta_interpolator_radians
 
     def __call__(self, tstarts, tstops, poly_coefficients):
 
@@ -70,5 +81,10 @@ class LLEPolynomial(object):
         expected_counts = integrals * corr
 
         # expected_counts = np.maximum(integrals * corr, 0)
+        if self.clip_at_zero:
 
-        return expected_counts
+            return np.maximum(expected_counts, 1e-12)
+
+        else:
+
+            return expected_counts

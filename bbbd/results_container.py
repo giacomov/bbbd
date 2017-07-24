@@ -21,6 +21,7 @@ class ResultsContainer(object):
                        ('highest net rate tstart', 999),
                        ('highest net rate tstop', 999),
                        ('highest net rate duration', -1),
+                       ('highest net rate exposure', -1),
                        ('highest net rate background', -1.0),
                        ('highest net rate background error', -1.0),
                        ('highest net rate significance', -1.0))

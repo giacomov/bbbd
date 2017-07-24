@@ -171,6 +171,9 @@ def go(args):
         bkg_sub_rate, bkg_sub_rate_err = get_rate(selected_events, eh.lle_exposure.get_exposure, blocks,
                                                   trigger_time, bkg_poly=llep, best_fit_poly=best_fit_poly)
 
+        # Compute the observed counts in the blocks
+        obs_counts_in_blocks, _ = np.histogram(selected_events, blocks)
+
         # Find the interval with the highest rate
         max_rate_idx = bkg_sub_rate.argmax()
 
@@ -190,13 +193,14 @@ def go(args):
         bkg_estimates = map(lambda this_best_fit:llep(max_rate_tstart, max_rate_tstop, this_best_fit),
                             bkg_sim_best_fits)
 
-        highest_net_rate_bkg_err = np.percentile(bkg_estimates, 84) - highest_net_rate_bkg
+        highest_net_rate_bkg_err = np.std(bkg_estimates)
 
         # Now compute the significance
         this_expo = eh.lle_exposure.get_exposure(max_rate_tstart + trigger_time,
                                                  max_rate_tstop + trigger_time)
-        sig = Significance((highest_net_rate + highest_net_rate_bkg)* this_expo,
+        sig = Significance(obs_counts_in_blocks[max_rate_idx],
                            highest_net_rate_bkg * this_expo, alpha=1.0)
+
         highest_net_rate_significance = sig.li_and_ma_equivalent_for_gaussian_background(highest_net_rate_bkg_err *
                                                                                          this_expo)[0]
 
@@ -206,6 +210,7 @@ def go(args):
                                              max_rate_tstart, max_rate_tstop,
                                              max_rate_duration))
         logger.info("Significance at maximum rate: %.2f sigma" % highest_net_rate_significance)
+        logger.info("Raw counts in maximum rate interval: %i" % obs_counts_in_blocks[max_rate_idx])
 
         # Save in the results
         results['highest net rate'] = highest_net_rate
@@ -213,6 +218,7 @@ def go(args):
         results['highest net rate tstart'] = max_rate_tstart
         results['highest net rate tstop'] = max_rate_tstop
         results['highest net rate duration'] = max_rate_duration
+        results['highest net rate exposure'] = this_expo
         results['highest net rate background'] = highest_net_rate_bkg
         results['highest net rate background error'] = highest_net_rate_bkg_err
         results['highest net rate significance'] = highest_net_rate_significance
