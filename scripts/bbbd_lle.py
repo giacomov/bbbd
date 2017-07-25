@@ -91,15 +91,20 @@ def go(args):
     root = os.path.splitext(os.path.basename(lle_file_orig))[0]
     lle_file = "%s_mkt.fit" % root
 
-    gtmktime.run(scfile=ft2_file,
-                 filter="(DATA_QUAL>0 || DATA_QUAL==-1) && LAT_CONFIG==1 && IN_SAA!=T && LIVETIME>0 && "
-                        "ANGSEP(RA_SCZ, DEC_SCZ, %.3f, %.3f) < %s && "
-                        "ANGSEP(RA_ZENITH, DEC_ZENITH, %.3f, %.3f) < 110" % (ra, dec, args.theta_max, ra, dec),
-                 roicut="no",
-                 evfile=lle_file_orig,
-                 outfile=lle_file,
-                 apply_filter='yes',
-                 overwrite='yes')
+    try:
+        gtmktime.run(scfile=ft2_file,
+                     filter="(DATA_QUAL>0 || DATA_QUAL==-1) && LAT_CONFIG==1 && IN_SAA!=T && LIVETIME>0 && "
+                            "ANGSEP(RA_SCZ, DEC_SCZ, %.3f, %.3f) < %s && "
+                            "ANGSEP(RA_ZENITH, DEC_ZENITH, %.3f, %.3f) < 110" % (ra, dec, args.theta_max, ra, dec),
+                     roicut="no",
+                     evfile=lle_file_orig,
+                     outfile=lle_file,
+                     apply_filter='yes',
+                     overwrite='yes')
+
+    except:
+
+        raise RuntimeError("gtmktime failed!")
 
     # Create container for the results
     results = ResultsContainer()
