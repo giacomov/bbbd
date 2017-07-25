@@ -115,7 +115,7 @@ def go(args):
 
     logger = get_logger(os.path.basename(__file__))
 
-    logger.info("Reading trigger information from %s" % lle_file)
+    logger.info("Read trigger information from %s" % lle_file)
     logger.info("Trigger name: %s" % trigger_name)
     logger.info("(RA, Dec) = (%.3f, %.3f)" % (ra, dec))
     logger.info("Trigger time = %.3f (MET)" % trigger_time)
@@ -166,7 +166,7 @@ def go(args):
 
         fig.savefig(bkg_plot_file)
 
-        # Run Bayesian Blocks
+        # Setup search window
 
         search_tstart, search_tstop = args.search_window
 
@@ -176,12 +176,15 @@ def go(args):
         within_gti, search_tstart, search_tstop = eh.lle_exposure.is_interval_in_gti(search_tstart + trigger_time,
                                                                                      search_tstop + trigger_time)
 
+        # Get the exposure of the window
+        window_exposure = eh.lle_exposure.get_exposure(search_tstart, search_tstop)
+
         # The updated values are in MET, need to remove the trigger time
 
         search_tstart -= trigger_time
         search_tstop -= trigger_time
 
-        if not within_gti:
+        if not within_gti or window_exposure <= 0:
 
             logger.error("The search window is outside the GTIs. Cannot continue.")
 

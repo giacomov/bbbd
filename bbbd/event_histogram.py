@@ -344,9 +344,11 @@ class EventHistogram(object):
         if not np.all(fit_polynomial(self._bin_starts[background_mask], self._bin_stops[background_mask],
                                            result.x) >= 0):
 
-            logger.warn("Polynomial is not positive everywhere. Clipping it.")
+            logger.warn("Polynomial is not positive everywhere.")
 
-            fit_polynomial.clip_at_zero = True
+        # Always clip the polynomial at zero so it can never give negative fluxes (which would throw off simulations)
+
+        fit_polynomial.clip_at_zero = True
 
         if plot:
 
