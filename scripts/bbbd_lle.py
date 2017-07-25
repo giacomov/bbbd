@@ -164,13 +164,23 @@ def go(args):
     logger.info("Selected %i events within the time window %.3f - %.3f" % (selected_events.shape[0],
                                                                            search_tstart, search_tstop))
 
-    # Run the Bayesian Blocks
+    if selected_events.shape[0] < 2:
 
-    logger.info("Running Bayesian Blocks...")
+        logger.error("Too few events selected. Nothing to do.")
 
-    blocks = bayesian_blocks(selected_events, search_tstart, search_tstop, args.p0, bkg_int_distr)
+        blocks = []
+        n_intervals = 0
 
-    n_intervals = len(blocks) - 1
+    else:
+
+
+        # Run the Bayesian Blocks
+
+        logger.info("Running Bayesian Blocks...")
+
+        blocks = bayesian_blocks(selected_events, search_tstart, search_tstop, args.p0, bkg_int_distr)
+
+        n_intervals = len(blocks) - 1
 
     bb_file = sanitize_filename("bb_res_%s.png" % trigger_name)
 
