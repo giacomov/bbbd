@@ -3,6 +3,8 @@ import numpy as np
 import scipy.interpolate
 import warnings
 
+from bbbd.util.intervals import TimeInterval
+
 
 class LLEExposure(object):
 
@@ -149,6 +151,36 @@ class LLEExposure(object):
                 in_gti = True
 
         return in_gti
+
+    def is_interval_in_gti(self, t1, t2):
+        """
+        Check whether the provided interval is within a GTI, and returns a new interval reduced to the GTI
+
+        :param t1:
+        :param t2:
+        :return:
+        """
+
+        requested_interval = TimeInterval(t1, t2)
+
+        new_interval = None
+
+        for start, stop in zip(self._gti_start, self._gti_stop):
+
+            gti_interval = TimeInterval(start, stop)
+
+            if gti_interval.overlaps_with(requested_interval):
+
+                new_interval = gti_interval.intersect(requested_interval)
+
+        if new_interval is None:
+
+            return False, -1, -1
+
+        else:
+
+            return True, new_interval.start_time, new_interval.stop_time
+
 
     @property
     def tstart(self):

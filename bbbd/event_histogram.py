@@ -15,6 +15,10 @@ from bbbd.statistic.loglike import poisson_log_likelihood_no_bkg
 logger = get_logger(os.path.basename(__file__))
 
 
+class NoDataToFit(RuntimeError):
+    pass
+
+
 class EventHistogram(object):
 
     def __init__(self, event_times, bin_size, exposure_function, tstart, tstop, reference_time):
@@ -220,7 +224,7 @@ class EventHistogram(object):
         return clone
 
     def fit_background(self, fit_polynomial, intervals, quiet=False, plot=True, background_mask=None,
-                       initial_approx=None):
+                       initial_approx=None, theta_max=90):
 
         if background_mask is None:
 
@@ -234,13 +238,17 @@ class EventHistogram(object):
 
                 background_mask[idx] = True
 
+        if np.sum(background_mask) == 0:
+
+            raise NoDataToFit("The background mask resulted in zero bins")
+
         # Compute the cos(theta) angle
         cos_theta = np.zeros_like(self._bin_centers, dtype=float)
         cos_theta[background_mask] = np.cos(fit_polynomial.theta_interpolator(self._bin_centers[background_mask]))
 
         # Remove from the background mask all the time intervals where the GRB is at more than 90 deg
 
-        idx = cos_theta <= np.cos(np.deg2rad(85))
+        idx = cos_theta <= np.cos(np.deg2rad(theta_max))
 
         background_mask[idx] = False
 
