@@ -281,6 +281,8 @@ class EventHistogram(object):
 
         # Define the objective function (which is cstat)
 
+        log_like_scale = 100.0
+
         def _objective_function(coefficients):
 
             expected_rate = fit_polynomial(self._bin_starts[background_mask], self._bin_stops[background_mask],
@@ -290,13 +292,13 @@ class EventHistogram(object):
 
             log_like = poisson_log_likelihood_no_bkg(self._counts[background_mask], expected_counts)
 
-            # Scale the log like by 100 to make easier the convergence
+            # Scale the log like to make easier the convergence
 
-            return -log_like / 100.0
+            return -log_like / log_like_scale
 
         if not quiet:
 
-            logger.info("Starting value for statistic: %.3f" % (_objective_function(initial_approx) * 100))
+            logger.info("Starting value for statistic: %.3f" % (_objective_function(initial_approx) * log_like_scale))
 
         # Now scale the parameters (because SLSQP needs need to be more or less in the same ballpark, while
         # in general in a polynomial they are very different)
@@ -312,7 +314,7 @@ class EventHistogram(object):
         # Construct bounds to avoid too wide variations
         bounds = []
 
-        for a, b in zip(initial_approx_scaled / 1000, initial_approx_scaled * 1000):
+        for a, b in zip(initial_approx_scaled / 100, initial_approx_scaled * 100):
 
             bounds.append(sorted([a, b]))
 
@@ -334,7 +336,7 @@ class EventHistogram(object):
         if not quiet:
             logger.info("Fit results:")
             logger.info("Coefficients: %s" % map(lambda x:"%.3g" % x, best_fit_coefficients))
-            logger.info("Likelihood value: %s" % (result.fun * 100))
+            logger.info("Likelihood value: %s" % (result.fun * log_like_scale))
 
         # Make sure the fit is good
         assert result.success == True, "Background fit failed!"
