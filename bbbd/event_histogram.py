@@ -234,9 +234,20 @@ class EventHistogram(object):
 
                 background_mask[idx] = True
 
-        self._background_mask = background_mask
+        # Compute the cos(theta) angle
+        cos_theta = np.zeros_like(self._bin_centers, dtype=float)
+        cos_theta[background_mask] = np.cos(fit_polynomial.theta_interpolator(self._bin_centers[background_mask]))
+
+        # Remove from the background mask all the time intervals where the GRB is at more than 90 deg
+
+        idx = cos_theta <= np.cos(np.deg2rad(85))
+
+        background_mask[idx] = False
 
         if not quiet: logger.info("Selected %i points" % np.sum(background_mask))
+
+        # Store background mask
+        self._background_mask = background_mask
 
         if initial_approx is None:
 
@@ -245,11 +256,9 @@ class EventHistogram(object):
             # The final fit function will be a polynomial multiplied by cos(theta). Since polyfit cannot
             # accept a user-defined function, we correct the data instead by diving them up by cos(theta)
 
-            cos_theta = np.cos(fit_polynomial.theta_interpolator(self._bin_centers[background_mask]))
+            this_rate = self._counts[background_mask] / self._exposure[background_mask] / cos_theta[background_mask]
 
-            this_rate = self._counts[background_mask] / self._exposure[background_mask] / cos_theta
-
-            this_counts_error = (1 + np.sqrt(self._counts[background_mask] + 0.75)) / cos_theta
+            this_counts_error = (1 + np.sqrt(self._counts[background_mask] + 0.75)) / cos_theta[background_mask]
 
             weight = 1 / (this_counts_error / self._exposure[background_mask]) # type: np.ndarray
 

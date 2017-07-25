@@ -126,7 +126,7 @@ class LLEExposure(object):
         return scipy.interpolate.InterpolatedUnivariateSpline(xs - self._trigger_time,
                                                               ys,
                                                               w=np.ones_like(xs),
-                                                              k=2,
+                                                              k=1,
                                                               check_finite=True,
                                                               ext=2)
 

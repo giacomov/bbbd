@@ -10,6 +10,9 @@ import astropy.io.fits as pyfits
 import numpy as np
 import matplotlib.pyplot as plt
 
+import GtApp
+import uuid
+
 from bbbd.event_histogram import EventHistogram
 from bbbd.util.logging_system import get_logger
 from bbbd.util.io_utils import sanitize_filename
@@ -59,6 +62,39 @@ def get_rate(arrival_times, exposure_function, bins, reference_time, bkg_poly=No
 
 
 def go(args):
+
+    # Check input parameters and sanitize file names
+
+    lle_file_orig = sanitize_filename(args.lle)
+    ft2_file = sanitize_filename(args.pt)
+
+    assert os.path.exists(lle_file_orig), "Provided LLE (FT1) file %s does not exist" % lle_file_orig
+    assert os.path.exists(ft2_file), "Provided pointing file (FT2) %s does not exist" % ft2_file
+
+    # The interval edges should be even
+    assert len(args.off_pulse_intervals) % 2 == 0, "You have to provide an even number of edges for the off pulse " \
+                                                   "interval"
+
+    assert len(args.search_window) == 2, "The search window should be a list of two floats (start and end of window)"
+
+    # First apply a GTI cut on the LLE file, since the GTI inside the FT1 are not good
+    # (for example, they do not exclude intervals with livetime=0)
+
+    # But first correct the GTIs (exclude intervals where livetime = 0)
+    gtmktime = GtApp.GtApp("gtmktime")
+
+    # Unique file name
+
+    root = os.path.splitext(os.path.basename(lle_file_orig))[0]
+    lle_file = "%s_mkt.fit" % root
+
+    gtmktime.run(scfile=ft2_file,
+                 filter="(DATA_QUAL>0 || DATA_QUAL==-1) && LAT_CONFIG==1 && IN_SAA!=T && LIVETIME>0",
+                 roicut="no",
+                 evfile=lle_file_orig,
+                 outfile=lle_file,
+                 apply_filter='yes',
+                 overwrite='yes')
 
     # Create container for the results
     results = ResultsContainer()
@@ -349,19 +385,5 @@ if __name__ == "__main__":
                         default=[-400.0, -20.0, 150.0, 500.0], type=float, nargs='+')
 
     args = parser.parse_args()
-
-    lle_file = sanitize_filename(args.lle)
-    ft2_file = sanitize_filename(args.pt)
-
-    # Sanitize input
-
-    assert os.path.exists(lle_file), "Provided LLE (FT1) file %s does not exist" % lle_file
-    assert os.path.exists(ft2_file), "Provided pointing file (FT2) %s does not exist" % ft2_file
-
-    # The interval edges should be even
-    assert len(args.off_pulse_intervals) % 2 == 0, "You have to provide an even number of edges for the off pulse " \
-                                                   "interval"
-
-    assert len(args.search_window) == 2, "The search window should be a list of two floats (start and end of window)"
 
     go(args)
