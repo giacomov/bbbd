@@ -5,6 +5,9 @@ import warnings
 
 from bbbd.util.intervals import TimeInterval
 
+class NoGTI(RuntimeError):
+    pass
+
 
 class LLEExposure(object):
 
@@ -40,6 +43,10 @@ class LLEExposure(object):
         # Keep only the needed entries (plus a padding of 10 bins)
         idx = (ft2_tstart >= self._gti_start.min() - 10 * ft2_bin_size) & \
               (ft2_tstop  <= self._gti_stop.max()  + 10 * ft2_bin_size)
+
+        if np.sum(idx) == 0:
+
+            raise NoGTI("No GTIs in file %s" % ft2_file)
 
         self._ft2_tstart = ft2_tstart[idx]
         self._ft2_tstop = ft2_tstop[idx]

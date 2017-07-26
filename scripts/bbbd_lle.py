@@ -20,6 +20,7 @@ from bbbd.statistic.bayesian_blocks import bayesian_blocks
 from bbbd.statistic.bkg_integral_distribution import BackgroundIntegralDistribution
 from bbbd.results_container import ResultsContainer
 from bbbd.statistic.significance import Significance
+from bbbd.instrument_specific.Fermi_LAT_LLE import NoGTI
 
 def get_rate(arrival_times, exposure_function, bins, reference_time, bkg_poly=None, best_fit_poly=None):
 
@@ -116,6 +117,11 @@ def go(args):
     trigger_time = pyfits.getval(lle_file, "TRIGTIME")
     trigger_name = pyfits.getval(lle_file, "OBJECT")
 
+    results['name'] = trigger_name
+    results['trigger time'] = trigger_time
+    results['ra'] = ra
+    results['dec'] = dec
+
     # Print out the information we just gathered
 
     logger = get_logger(os.path.basename(__file__))
@@ -126,9 +132,16 @@ def go(args):
     logger.info("Trigger time = %.3f (MET)" % trigger_time)
 
     # Make histogram and fit the background
+    try:
 
-    eh = EventHistogram.from_ft1_and_ft2(lle_file, ft2_file, bin_size=args.binsize,
-                                         selection=args.cut)
+        eh = EventHistogram.from_ft1_and_ft2(lle_file, ft2_file, bin_size=args.binsize,
+                                             selection=args.cut)
+
+    except NoGTI:
+
+        logger.error("There are no GTIs in ft2 file %s" % ft2_file)
+
+        _clean_exit(results, logger, args.outfile)
 
     # Use the polynomial multiplied by the cos(theta) (theta is the off-axis angle)
 
@@ -137,12 +150,6 @@ def go(args):
     # Format the off_pulse_intervals from [-400, -20, 150, 500] to ((-400, -20), (150, 500))
 
     off_pulse_intervals = zip(args.off_pulse_intervals[::2], args.off_pulse_intervals[1::2])
-
-    # Some default values for the results
-    bkg_gof = -1.0
-    n_intervals = -1
-    detected = False
-    blocks = []
 
     # Fit the background
 
@@ -154,257 +161,256 @@ def go(args):
 
         logger.error("The background selection returned zero bins. Cannot fit the background. Exiting.")
 
-    else:
+        _clean_exit(results, logger, args.outfile)
 
-        # Compute goodness of fit for the background
-        # (this also returns the best fit parameters for the polynomials obtained from the simulations)
-        bkg_gof, bkg_sim_best_fits = eh.get_background_gof(cstat, llep, best_fit_poly, args.nbkgsim,
-                                                           off_pulse_intervals)
+    # Compute goodness of fit for the background
+    # (this also returns the best fit parameters for the polynomials obtained from the simulations)
+    bkg_gof, bkg_sim_best_fits = eh.get_background_gof(cstat, llep, best_fit_poly, args.nbkgsim,
+                                                       off_pulse_intervals)
 
-        logger.info("Background goodness of fit: %.3f" % (bkg_gof))
+    logger.info("Background goodness of fit: %.3f" % (bkg_gof))
 
-        # Save background fit plot
+    # Save into results
 
-        bkg_plot_file = sanitize_filename("bkgfit_%s.png" % trigger_name)
-
-        logger.info("Saving background fit plot to %s" % bkg_plot_file)
-
-        fig.savefig(bkg_plot_file)
-
-        # Setup search window
-
-        search_tstart, search_tstop = args.search_window
-
-        # Check whether the search window is within a GTI,
-        # If it is but only partially, the search window will be adjusted
-
-        within_gti, search_tstart, search_tstop = eh.lle_exposure.is_interval_in_gti(search_tstart + trigger_time,
-                                                                                     search_tstop + trigger_time)
-
-        # Get the exposure of the window
-        window_exposure = eh.lle_exposure.get_exposure(search_tstart, search_tstop)
-
-        # The updated values are in MET, need to remove the trigger time
-
-        search_tstart -= trigger_time
-        search_tstop -= trigger_time
-
-        if not within_gti or window_exposure <= 0:
-
-            logger.error("The search window is outside the GTIs. Cannot continue.")
-
-        else:
-
-
-            # First we need the integral distribution of the background
-            bkg_int_distr = BackgroundIntegralDistribution(llep, best_fit_parameters=best_fit_poly,
-                                                           tstart=search_tstart, tstop=search_tstop)
-
-            # Create a mask to select only the events within the search window
-            idx = (eh.arrival_times >= search_tstart) & (eh.arrival_times < search_tstop)
-
-            selected_events = eh.arrival_times[idx]
-
-            selected_events.sort()
-
-            logger.info("Selected %i events within the time window %.3f - %.3f" % (selected_events.shape[0],
-                                                                                   search_tstart, search_tstop))
-
-            if selected_events.shape[0] < 2:
-
-                logger.error("Too few events selected. Nothing to do.")
-
-                blocks = []
-                n_intervals = 0
-
-            else:
-
-
-                # Run the Bayesian Blocks
-
-                logger.info("Running Bayesian Blocks...")
-
-                blocks = bayesian_blocks(selected_events, search_tstart, search_tstop, args.p0, bkg_int_distr)
-
-                n_intervals = len(blocks) - 1
-
-            bb_file = sanitize_filename("bb_res_%s.png" % trigger_name)
-
-            detected = n_intervals > 2
-
-            if detected:
-
-                interesting_intervals = zip(blocks[1:-1], blocks[2:-1])
-
-                # Print out the off_pulse_intervals (if any)
-                logger.info("Found %i interesting intervals between %.3f and %.3f" % (len(interesting_intervals),
-                                                                                      search_tstart, search_tstop))
-
-                # Make image and print off_pulse_intervals
-                fig = eh.plot()
-
-                for t1, t2 in interesting_intervals:
-
-                    logger.info("%.3f - %.3f" % (t1, t2))
-
-                    for tt in [t1, t2]:
-
-                        fig.axes[0].axvline(tt, linestyle='--')
-
-                # Cover only the search window
-
-                fig.axes[0].set_xlim([search_tstart, search_tstop])
-
-                logger.info("Saving light curve to %s" % bb_file)
-
-                fig.savefig(bb_file)
-
-                # Now compute the rates of events
-                bkg_sub_rate, bkg_sub_rate_err = get_rate(selected_events, eh.lle_exposure.get_exposure, blocks,
-                                                          trigger_time, bkg_poly=llep, best_fit_poly=best_fit_poly)
-
-                # Compute the observed counts in the blocks
-                obs_counts_in_blocks, _ = np.histogram(selected_events, blocks)
-
-                # Find the interval with the highest rate
-                max_rate_idx = bkg_sub_rate.argmax()
-
-                # Get its start and stop time
-                max_rate_tstart = blocks[:-1][max_rate_idx]
-                max_rate_tstop = blocks[1:][max_rate_idx]
-                max_rate_duration = max_rate_tstop - max_rate_tstart
-
-                # Get maximum rate and rate error
-                highest_net_rate = bkg_sub_rate[max_rate_idx]
-                highest_net_rate_err = bkg_sub_rate_err[max_rate_idx]
-
-                # Get corresponding background and background error
-                highest_net_rate_bkg = llep(max_rate_tstart, max_rate_tstop, best_fit_poly)
-
-                # To get the error we use the best fit values of the simulations obtained above and measure
-                # the standard deviation
-                bkg_estimates = map(lambda this_best_fit:llep(max_rate_tstart, max_rate_tstop, this_best_fit),
-                                    bkg_sim_best_fits)
-
-                highest_net_rate_bkg_err = np.std(bkg_estimates)
-
-                # Now compute the significance
-                this_expo = eh.lle_exposure.get_exposure(max_rate_tstart + trigger_time,
-                                                         max_rate_tstop + trigger_time)
-                sig = Significance(obs_counts_in_blocks[max_rate_idx],
-                                   highest_net_rate_bkg * this_expo, alpha=1.0)
-
-                highest_net_rate_significance = sig.li_and_ma_equivalent_for_gaussian_background(highest_net_rate_bkg_err *
-                                                                                                 this_expo)[0]
-
-                logger.info("Maximum net rate: %.3f +/- %.3f cts at %.3f - %.3f "
-                            "(duration = %.2f s)" % (highest_net_rate,
-                                                     highest_net_rate_err,
-                                                     max_rate_tstart, max_rate_tstop,
-                                                     max_rate_duration))
-                logger.info("Significance at maximum rate: %.2f sigma" % highest_net_rate_significance)
-                logger.info("Raw counts in maximum rate interval: %i" % obs_counts_in_blocks[max_rate_idx])
-
-                # Save in the results
-                results['highest net rate'] = highest_net_rate
-                results['highest net rate error'] = highest_net_rate_err
-                results['highest net rate tstart'] = max_rate_tstart
-                results['highest net rate tstop'] = max_rate_tstop
-                results['highest net rate duration'] = max_rate_duration
-                results['highest net rate exposure'] = this_expo
-                results['highest net rate background'] = highest_net_rate_bkg
-                results['highest net rate background error'] = highest_net_rate_bkg_err
-                results['highest net rate significance'] = highest_net_rate_significance
-
-                # Make a light curve with a bin size equal to the length of the block with the maximum rate,
-                # and shifted so that the block with the maximum rate is exactly one of the bins
-                optimal_bins = np.arange(max_rate_tstart - 10 * max_rate_duration,
-                                         max_rate_tstop + 10 * max_rate_duration,
-                                         max_rate_duration)
-
-                bkg_sub_rate, bkg_sub_rate_err = get_rate(selected_events, eh.lle_exposure.get_exposure, optimal_bins,
-                                                          trigger_time, bkg_poly=llep, best_fit_poly=best_fit_poly)
-
-                # Plot the optimal light curve
-                fig, sub = plt.subplots(1, 1)
-
-                rr = np.zeros_like(optimal_bins, dtype=float)
-                rr[:-1] = bkg_sub_rate
-
-                sub.step(optimal_bins, rr, where='post', color='blue')
-
-                bc = 0.5 * (optimal_bins[1:] + optimal_bins[:-1])
-                sub.errorbar(bc, rr[:-1], yerr=bkg_sub_rate_err, fmt='.', color='blue')
-
-                sub.axhline(0, linestyle='--', color='grey', alpha=0.5)
-
-                sub.set_ylabel("Net rate (cts/s)")
-                sub.set_xlabel("Time since %s" % trigger_time)
-
-                # Zoom in if necessary so we do not show parts where the background model does not apply
-                # (i.e., before and after the end of the off-pulse intervals)
-                sub.set_xlim([max(search_tstart, min(args.off_pulse_intervals), optimal_bins.min()),
-                              min(search_tstop, max(args.off_pulse_intervals), optimal_bins.max())])
-
-                optimal_lc = sanitize_filename("optimal_lc_%s.png" % trigger_name)
-
-                logger.info("Saving optimal light curve %s" % optimal_lc)
-
-                fig.savefig(optimal_lc)
-
-            else:
-
-                # No detection
-
-                logger.info("No interesting interval found.")
-
-                # Now compute the rates of events
-
-                optimal_bins = np.arange(min(args.off_pulse_intervals),
-                                         max(args.off_pulse_intervals),
-                                         1.0)
-
-                bkg_sub_rate, bkg_sub_rate_err = get_rate(eh.arrival_times, eh.lle_exposure.get_exposure, optimal_bins,
-                                                          trigger_time, bkg_poly=llep, best_fit_poly=best_fit_poly)
-
-                # Plot the optimal light curve
-                fig, sub = plt.subplots(1, 1)
-
-                rr = np.zeros_like(optimal_bins, dtype=float)
-                rr[:-1] = bkg_sub_rate
-
-                sub.step(optimal_bins, rr, where='post', color='blue')
-
-                sub.axhline(0, linestyle='--', color='grey', alpha=0.5)
-
-                sub.set_ylabel("Net rate (cts/s)")
-                sub.set_xlabel("Time since %s" % trigger_time)
-
-                # Zoom in if necessary so we do not show parts where the background model does not apply
-                # (i.e., before and after the end of the off-pulse intervals)
-                sub.set_xlim([max(optimal_bins.min(), min(args.off_pulse_intervals)),
-                              min(optimal_bins.max(), max(args.off_pulse_intervals))])
-
-                optimal_lc = sanitize_filename("optimal_lc_%s.png" % trigger_name)
-
-                logger.info("Saving optimal light curve %s" % optimal_lc)
-
-                fig.savefig(optimal_lc)
-
-    # Save results
-    results['name'] = trigger_name
-    results['trigger time'] = trigger_time
-    results['ra'] = ra
-    results['dec'] = dec
     results['background fit gof'] = bkg_gof
+
+    # Save background fit plot
+
+    bkg_plot_file = sanitize_filename("bkgfit_%s.png" % trigger_name)
+
+    logger.info("Saving background fit plot to %s" % bkg_plot_file)
+
+    fig.savefig(bkg_plot_file)
+
+    # Setup search window
+
+    search_tstart, search_tstop = args.search_window
+
+    # Check whether the search window is within a GTI,
+    # If it is but only partially, the search window will be adjusted
+
+    within_gti, search_tstart, search_tstop = eh.lle_exposure.is_interval_in_gti(search_tstart + trigger_time,
+                                                                                 search_tstop + trigger_time)
+
+    # Get the exposure of the window
+    window_exposure = eh.lle_exposure.get_exposure(search_tstart, search_tstop)
+
+    # The updated values are in MET, need to remove the trigger time
+
+    search_tstart -= trigger_time
+    search_tstop -= trigger_time
+
+    if not within_gti or window_exposure <= 0:
+
+        logger.error("The search window is outside the GTIs. Cannot continue.")
+
+        _clean_exit(results, logger, args.outfile)
+
+    # First we need the integral distribution of the background
+    bkg_int_distr = BackgroundIntegralDistribution(llep, best_fit_parameters=best_fit_poly,
+                                                   tstart=search_tstart, tstop=search_tstop)
+
+    # Create a mask to select only the events within the search window
+    idx = (eh.arrival_times >= search_tstart) & (eh.arrival_times < search_tstop)
+
+    selected_events = eh.arrival_times[idx]
+
+    selected_events.sort()
+
+    logger.info("Selected %i events within the time window %.3f - %.3f" % (selected_events.shape[0],
+                                                                           search_tstart, search_tstop))
+
+    if selected_events.shape[0] < 2:
+
+        logger.error("Too few events selected. Nothing to do.")
+
+        _clean_exit(results, logger, args.outfile)
+
+    # Run the Bayesian Blocks
+
+    logger.info("Running Bayesian Blocks...")
+
+    blocks = bayesian_blocks(selected_events, search_tstart, search_tstop, args.p0, bkg_int_distr)
+
+    n_intervals = len(blocks) - 1
+
+    bb_file = sanitize_filename("bb_res_%s.png" % trigger_name)
+
+    detected = n_intervals > 2
+
+    # Save into results
+
     results['number of intervals'] = n_intervals
     results['detected'] = detected
-    results['blocks'] = ",".join(map(lambda x:"%.3f" % x, blocks))
+    results['blocks'] = ",".join(map(lambda x: "%.3f" % x, blocks))
 
+    if detected:
+
+        interesting_intervals = zip(blocks[1:-1], blocks[2:-1])
+
+        # Print out the off_pulse_intervals (if any)
+        logger.info("Found %i interesting intervals between %.3f and %.3f" % (len(interesting_intervals),
+                                                                              search_tstart, search_tstop))
+
+        # Make image and print off_pulse_intervals
+        fig = eh.plot()
+
+        for t1, t2 in interesting_intervals:
+
+            logger.info("%.3f - %.3f" % (t1, t2))
+
+            for tt in [t1, t2]:
+
+                fig.axes[0].axvline(tt, linestyle='--')
+
+        # Cover only the search window
+
+        fig.axes[0].set_xlim([search_tstart, search_tstop])
+
+        logger.info("Saving light curve to %s" % bb_file)
+
+        fig.savefig(bb_file)
+
+        # Now compute the rates of events
+        bkg_sub_rate, bkg_sub_rate_err = get_rate(selected_events, eh.lle_exposure.get_exposure, blocks,
+                                                  trigger_time, bkg_poly=llep, best_fit_poly=best_fit_poly)
+
+        # Compute the observed counts in the blocks
+        obs_counts_in_blocks, _ = np.histogram(selected_events, blocks)
+
+        # Find the interval with the highest rate
+        max_rate_idx = bkg_sub_rate.argmax()
+
+        # Get its start and stop time
+        max_rate_tstart = blocks[:-1][max_rate_idx]
+        max_rate_tstop = blocks[1:][max_rate_idx]
+        max_rate_duration = max_rate_tstop - max_rate_tstart
+
+        # Get maximum rate and rate error
+        highest_net_rate = bkg_sub_rate[max_rate_idx]
+        highest_net_rate_err = bkg_sub_rate_err[max_rate_idx]
+
+        # Get corresponding background and background error
+        highest_net_rate_bkg = llep(max_rate_tstart, max_rate_tstop, best_fit_poly)
+
+        # To get the error we use the best fit values of the simulations obtained above and measure
+        # the standard deviation
+        bkg_estimates = map(lambda this_best_fit:llep(max_rate_tstart, max_rate_tstop, this_best_fit),
+                            bkg_sim_best_fits)
+
+        highest_net_rate_bkg_err = np.std(bkg_estimates)
+
+        # Now compute the significance
+        this_expo = eh.lle_exposure.get_exposure(max_rate_tstart + trigger_time,
+                                                 max_rate_tstop + trigger_time)
+        sig = Significance(obs_counts_in_blocks[max_rate_idx],
+                           highest_net_rate_bkg * this_expo, alpha=1.0)
+
+        highest_net_rate_significance = sig.li_and_ma_equivalent_for_gaussian_background(highest_net_rate_bkg_err *
+                                                                                         this_expo)[0]
+
+        logger.info("Maximum net rate: %.3f +/- %.3f cts at %.3f - %.3f "
+                    "(duration = %.2f s)" % (highest_net_rate,
+                                             highest_net_rate_err,
+                                             max_rate_tstart, max_rate_tstop,
+                                             max_rate_duration))
+        logger.info("Significance at maximum rate: %.2f sigma" % highest_net_rate_significance)
+        logger.info("Raw counts in maximum rate interval: %i" % obs_counts_in_blocks[max_rate_idx])
+
+        # Save in the results
+        results['highest net rate'] = highest_net_rate
+        results['highest net rate error'] = highest_net_rate_err
+        results['highest net rate tstart'] = max_rate_tstart
+        results['highest net rate tstop'] = max_rate_tstop
+        results['highest net rate duration'] = max_rate_duration
+        results['highest net rate exposure'] = this_expo
+        results['highest net rate background'] = highest_net_rate_bkg
+        results['highest net rate background error'] = highest_net_rate_bkg_err
+        results['highest net rate significance'] = highest_net_rate_significance
+
+        # Make a light curve with a bin size equal to the length of the block with the maximum rate,
+        # and shifted so that the block with the maximum rate is exactly one of the bins
+        optimal_bins = np.arange(max_rate_tstart - 10 * max_rate_duration,
+                                 max_rate_tstop + 10 * max_rate_duration,
+                                 max_rate_duration)
+
+        bkg_sub_rate, bkg_sub_rate_err = get_rate(selected_events, eh.lle_exposure.get_exposure, optimal_bins,
+                                                  trigger_time, bkg_poly=llep, best_fit_poly=best_fit_poly)
+
+        # Plot the optimal light curve
+        fig, sub = plt.subplots(1, 1)
+
+        rr = np.zeros_like(optimal_bins, dtype=float)
+        rr[:-1] = bkg_sub_rate
+
+        sub.step(optimal_bins, rr, where='post', color='blue')
+
+        bc = 0.5 * (optimal_bins[1:] + optimal_bins[:-1])
+        sub.errorbar(bc, rr[:-1], yerr=bkg_sub_rate_err, fmt='.', color='blue')
+
+        sub.axhline(0, linestyle='--', color='grey', alpha=0.5)
+
+        sub.set_ylabel("Net rate (cts/s)")
+        sub.set_xlabel("Time since %s" % trigger_time)
+
+        # Zoom in if necessary so we do not show parts where the background model does not apply
+        # (i.e., before and after the end of the off-pulse intervals)
+        sub.set_xlim([max(search_tstart, min(args.off_pulse_intervals), optimal_bins.min()),
+                      min(search_tstop, max(args.off_pulse_intervals), optimal_bins.max())])
+
+        optimal_lc = sanitize_filename("optimal_lc_%s.png" % trigger_name)
+
+        logger.info("Saving optimal light curve %s" % optimal_lc)
+
+        fig.savefig(optimal_lc)
+
+    else:
+
+        # No detection
+
+        logger.info("No interesting interval found.")
+
+        # Now compute the rates of events
+
+        optimal_bins = np.arange(min(args.off_pulse_intervals),
+                                 max(args.off_pulse_intervals),
+                                 1.0)
+
+        bkg_sub_rate, bkg_sub_rate_err = get_rate(eh.arrival_times, eh.lle_exposure.get_exposure, optimal_bins,
+                                                  trigger_time, bkg_poly=llep, best_fit_poly=best_fit_poly)
+
+        # Plot the optimal light curve
+        fig, sub = plt.subplots(1, 1)
+
+        rr = np.zeros_like(optimal_bins, dtype=float)
+        rr[:-1] = bkg_sub_rate
+
+        sub.step(optimal_bins, rr, where='post', color='blue')
+
+        sub.axhline(0, linestyle='--', color='grey', alpha=0.5)
+
+        sub.set_ylabel("Net rate (cts/s)")
+        sub.set_xlabel("Time since %s" % trigger_time)
+
+        # Zoom in if necessary so we do not show parts where the background model does not apply
+        # (i.e., before and after the end of the off-pulse intervals)
+        sub.set_xlim([max(optimal_bins.min(), min(args.off_pulse_intervals)),
+                      min(optimal_bins.max(), max(args.off_pulse_intervals))])
+
+        optimal_lc = sanitize_filename("optimal_lc_%s.png" % trigger_name)
+
+        logger.info("Saving optimal light curve %s" % optimal_lc)
+
+        fig.savefig(optimal_lc)
+
+    _clean_exit(results, logger, args.outfile)
+
+
+def _clean_exit(results, logger, outfile):
     # NOTE: if there is a detection, all the other results are filled up there (above)
 
     # Write JSON file
-    outfile = sanitize_filename(args.outfile)
+    outfile = sanitize_filename(outfile)
     logger.info("Writing results in JSON to %s" % (outfile))
     results.write_to(outfile)
 
@@ -413,6 +419,7 @@ def go(args):
     print("==============\n")
     results.display()
     print("\n")
+
 
 if __name__ == "__main__":
 
