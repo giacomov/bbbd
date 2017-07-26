@@ -102,7 +102,7 @@ def go(args):
         gtmktime.run(scfile=ft2_file,
                      filter="(DATA_QUAL>0 || DATA_QUAL==-1) && LAT_CONFIG==1 && IN_SAA!=T && LIVETIME>0 && "
                             "ANGSEP(RA_SCZ, DEC_SCZ, %.3f, %.3f) < %s && "
-                            "ANGSEP(RA_ZENITH, DEC_ZENITH, %.3f, %.3f) < 110" % (ra, dec, args.theta_max, ra, dec),
+                            "ANGSEP(RA_ZENITH, DEC_ZENITH, %.3f, %.3f) < 105" % (ra, dec, args.theta_max, ra, dec),
                      roicut="no",
                      evfile=lle_file_orig,
                      outfile=lle_file,
