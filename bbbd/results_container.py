@@ -24,7 +24,8 @@ class ResultsContainer(object):
                        ('highest net rate exposure', -1),
                        ('highest net rate background', -1.0),
                        ('highest net rate background error', -1.0),
-                       ('highest net rate significance', -1.0))
+                       ('highest net rate significance', -1.0),
+                       ('final status', ''))
 
     def __init__(self):
 

@@ -142,7 +142,7 @@ def go(args):
 
         logger.error("There are no GTIs in ft1 file %s" % lle_file)
 
-        _clean_exit(results, logger, args.outfile)
+        _clean_exit(results, logger, args.outfile, status="No GTIs in FT1 file")
 
     # Use the polynomial multiplied by the cos(theta) (theta is the off-axis angle)
 
@@ -150,7 +150,24 @@ def go(args):
 
     # Format the off_pulse_intervals from [-400, -20, 150, 500] to ((-400, -20), (150, 500))
 
-    off_pulse_intervals = zip(args.off_pulse_intervals[::2], args.off_pulse_intervals[1::2])
+    raw_off_pulse_intervals = zip(args.off_pulse_intervals[::2], args.off_pulse_intervals[1::2])
+
+    # Make sure that the off pulse intervals have at least a bit of exposure
+    off_pulse_intervals = []
+
+    for (t1, t2) in raw_off_pulse_intervals:
+
+        in_gti, new_t1, new_t2 = eh.lle_exposure.is_interval_in_gti(t1 + trigger_time, t2 + trigger_time)
+
+        if in_gti:
+
+            off_pulse_intervals.append((new_t1 - trigger_time, new_t2 - trigger_time))
+
+        else:
+
+            logger.error("One or more of the off-pulse intervals are not in GTIs. Cannot continue.")
+
+            _clean_exit(results, logger, args.outfile, status="Off-pulse intervals not in GTIs")
 
     # Fit the background
 
@@ -162,7 +179,7 @@ def go(args):
 
         logger.error("The background selection returned zero bins. Cannot fit the background. Exiting.")
 
-        _clean_exit(results, logger, args.outfile)
+        _clean_exit(results, logger, args.outfile, status="No bins survive the exposure and GTI cut for the background")
 
     # Compute goodness of fit for the background
     # (this also returns the best fit parameters for the polynomials obtained from the simulations)
@@ -205,7 +222,7 @@ def go(args):
 
         logger.error("The search window is outside the GTIs. Cannot continue.")
 
-        _clean_exit(results, logger, args.outfile)
+        _clean_exit(results, logger, args.outfile, status="Search window is completely outside the GTIs")
 
     # First we need the integral distribution of the background
     bkg_int_distr = BackgroundIntegralDistribution(llep, best_fit_parameters=best_fit_poly,
@@ -225,7 +242,7 @@ def go(args):
 
         logger.error("Too few events selected. Nothing to do.")
 
-        _clean_exit(results, logger, args.outfile)
+        _clean_exit(results, logger, args.outfile, status="Too few events in search window")
 
     # Run the Bayesian Blocks
 
@@ -404,11 +421,14 @@ def go(args):
 
         fig.savefig(optimal_lc)
 
-    _clean_exit(results, logger, args.outfile)
+    _clean_exit(results, logger, args.outfile, status="success")
 
 
-def _clean_exit(results, logger, outfile):
-    # NOTE: if there is a detection, all the other results are filled up there (above)
+def _clean_exit(results, logger, outfile, status):
+
+    # Update the status before writing it to file
+
+    results['final status'] = status
 
     # Write JSON file
     outfile = sanitize_filename(outfile)
