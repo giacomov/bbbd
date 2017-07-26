@@ -64,6 +64,9 @@ def get_rate(arrival_times, exposure_function, bins, reference_time, bkg_poly=No
 
 def go(args):
 
+    # Get the logger
+    logger = get_logger(os.path.basename(__file__))
+
     # Check input parameters and sanitize file names
 
     lle_file_orig = sanitize_filename(args.lle)
@@ -93,6 +96,8 @@ def go(args):
     root = os.path.splitext(os.path.basename(lle_file_orig))[0]
     lle_file = "%s_mkt.fit" % root
 
+    logger.info("Running gtmktime")
+
     try:
         gtmktime.run(scfile=ft2_file,
                      filter="(DATA_QUAL>0 || DATA_QUAL==-1) && LAT_CONFIG==1 && IN_SAA!=T && LIVETIME>0 && "
@@ -107,6 +112,10 @@ def go(args):
     except:
 
         raise RuntimeError("gtmktime failed!")
+
+    else:
+
+        logger.info("gtmktime done")
 
     # Create container for the results
     results = ResultsContainer()
@@ -125,7 +134,6 @@ def go(args):
 
     # Print out the information we just gathered
 
-    logger = get_logger(os.path.basename(__file__))
 
     logger.info("Read trigger information from %s" % lle_file)
     logger.info("Trigger name: %s" % trigger_name)
@@ -157,17 +165,33 @@ def go(args):
 
     for (t1, t2) in raw_off_pulse_intervals:
 
-        in_gti, new_t1, new_t2 = eh.lle_exposure.is_interval_in_gti(t1 + trigger_time, t2 + trigger_time)
+        in_gti, new_t1_met, new_t2_met = eh.lle_exposure.is_interval_in_gti(t1 + trigger_time, t2 + trigger_time)
 
-        if in_gti:
+        this_expo = eh.lle_exposure.get_exposure(new_t1_met, new_t2_met)
 
-            off_pulse_intervals.append((new_t1 - trigger_time, new_t2 - trigger_time))
+        # Accept the background interval if it has at least 5% of the exposure of the proposed interval
+        # This is to avoid keeping intervals that are too short
+
+        if in_gti and this_expo >= (t2 - t1) / 100.0 * 5:
+
+            logger.info("Off-pulse interval %.3f - %.3f accepted as %.3f - %.3f" % (t1,
+                                                                                    t2,
+                                                                                    new_t1_met - trigger_time,
+                                                                                    new_t2_met - trigger_time))
+
+            off_pulse_intervals.append((new_t1_met - trigger_time, new_t2_met - trigger_time))
 
         else:
 
-            logger.error("One or more of the off-pulse intervals are not in GTIs. Cannot continue.")
+            logger.error("Off-pulse interval %.3f - %.3f has been rejected. In GTI: %s, exposure: %.3f" % (t1,
+                                                                                                           t2,
+                                                                                                           in_gti,
+                                                                                                           this_expo))
 
-            _clean_exit(results, logger, args.outfile, status="Off-pulse intervals not in GTIs")
+            logger.error("One or more of the off-pulse intervals are not in GTIs or have an exposure too small. "
+                         "Cannot continue.")
+
+            _clean_exit(results, logger, args.outfile, status="One or more off-pulse intervals have been rejected")
 
     # Fit the background
 
@@ -455,8 +479,8 @@ if __name__ == "__main__":
     parser.add_argument("--outfile", help="Outfile which will contain the results of the analysis",
                         type=str, required=True)
     parser.add_argument("--search_window", help="Time interval where to search for a signal (search window). "
-                                                "Default is '-50 200'",
-                        nargs='+', default=[-50.0, 200.0], type=float)
+                                                "Default is '-20 200'",
+                        nargs='+', default=[-20.0, 200.0], type=float)
     parser.add_argument("--binsize", help="Binsize for the histogram used to fit the background (default: 1.0)",
                         default=1.0, type=float)
     parser.add_argument("--cut", help="Cut for the data. It is a string like '(ENERGY > 10) & (ENERGY < 100)', where"
@@ -464,7 +488,7 @@ if __name__ == "__main__":
                         default=None, type=str)
     parser.add_argument("--theta_max", help="Maximum theta. Time intervals where the source is at an off-axis angle "
                                             "larger than this value will be removed from the analysis",
-                                       default=90, type=float)
+                                       default=88, type=float)
     parser.add_argument("--poly_degree", help="Degree for the polynomial to be used in the fit (default: 3)",
                         default=3, type=int)
     parser.add_argument("--nbkgsim", help="Number of simulations for the background goodness of fit (default: 1000)",
