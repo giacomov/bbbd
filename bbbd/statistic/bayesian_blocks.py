@@ -26,6 +26,16 @@ def getArguments(names, local_dict, *args, **kwargs):
 numexpr.necompiler.getArguments = getArguments
 
 
+def initializer():
+
+    # Generate a random seed for this process
+    pid = multiprocessing.current_process()._identity[0]
+    np.random.seed(pid * 1000)
+
+    logger = get_logger("initializer in process %i" % pid)
+    logger.info("Initializing process %i with seed %i" % (pid, pid * 1000))
+
+
 def simulation_worker(i, desired_p0, n_events):
 
     t = np.cumsum(np.random.exponential(1.0, size=n_events))
@@ -38,10 +48,11 @@ def simulation_worker(i, desired_p0, n_events):
 
     blocks = bayesian_blocks(t, 0, n_events, desired_p0)
 
-    return len(blocks) - 2
+    return len(blocks)
 
 
-def calibrate_prior(desired_p0, n_events, n_sim=10000, n_cpu=multiprocessing.cpu_count()):
+def calibrate_prior(desired_p0, n_events, n_sim=10000, n_cpu=multiprocessing.cpu_count(), full_intervals=False,
+                    chunksize=60):
 
     logger = get_logger("calibrate_prior")
 
@@ -55,17 +66,35 @@ def calibrate_prior(desired_p0, n_events, n_sim=10000, n_cpu=multiprocessing.cpu
 
     if n_cpu > 0:
 
-        pool = multiprocessing.Pool(processes=n_cpu)
+        pool = multiprocessing.Pool(processes=n_cpu, initializer=initializer)
 
         try:
 
-            chunksize = 10
+            for i, this_n_blocks in enumerate(pool.imap(partial_worker, range(n_sim), chunksize=chunksize)):
 
-            for i, result in enumerate(pool.imap(partial_worker, range(n_sim), chunksize=chunksize)):
+                n_intervals = this_n_blocks - 1
 
-                false_positive += result
+                if n_intervals > 1:
 
-                if (i+1) % (chunksize * n_cpu) == 0:
+                    logger.info("Found %i interval(s) in iteration %i" % (n_intervals, i))
+
+                    # We have found something beyond just start and stop
+
+                    if full_intervals:
+
+                        # We want at least 4 edges (3 intervals)
+
+                        if n_intervals >= 3:
+
+                            logger.info("Found %i full interval(s) in iteration %i" % (n_intervals-2, i))
+
+                            false_positive += n_intervals - 2
+
+                    else:
+
+                        false_positive += n_intervals
+
+                if (i+1) % (chunksize * n_cpu) == 0 or i == n_sim - 1:
 
                     this_time = time.time()
                     elapsed_time_seconds = this_time - start_time
@@ -86,9 +115,9 @@ def calibrate_prior(desired_p0, n_events, n_sim=10000, n_cpu=multiprocessing.cpu
 
     else:
 
-        for i, result in enumerate(map(partial_worker, range(n_sim))):
+        for i, this_n_blocks in enumerate(map(partial_worker, range(n_sim))):
 
-            false_positive += result
+            false_positive += this_n_blocks
 
             if i % 100 == 0:
                 logger.info("%i out of %i completed" % (i + 1, n_sim))
