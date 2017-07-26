@@ -23,6 +23,11 @@ class LLEExposure(object):
             self._gti_stop = ft1_['GTI'].data['STOP']
             self._trigger_time = ft1_['EVENTS'].header['TRIGTIME']
 
+            # Make sure we have at least one event and a GTI
+            if len(self._gti_start) == 0:
+
+                raise NoGTI("No GTI in FT1 %s" % lle_file)
+
         # Read FT2 file
 
         with pyfits.open(ft2_file) as ft2_:

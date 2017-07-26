@@ -6,6 +6,7 @@ matplotlib.use("Agg")
 
 import argparse
 import os
+import sys
 import astropy.io.fits as pyfits
 import numpy as np
 import matplotlib.pyplot as plt
@@ -139,7 +140,7 @@ def go(args):
 
     except NoGTI:
 
-        logger.error("There are no GTIs in ft2 file %s" % ft2_file)
+        logger.error("There are no GTIs in ft1 file %s" % lle_file)
 
         _clean_exit(results, logger, args.outfile)
 
@@ -419,6 +420,8 @@ def _clean_exit(results, logger, outfile):
     print("==============\n")
     results.display()
     print("\n")
+
+    sys.exit(0)
 
 
 if __name__ == "__main__":
